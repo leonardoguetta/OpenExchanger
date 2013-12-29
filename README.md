@@ -1,4 +1,4 @@
 OpenExchanger
 =============
 
-Please visit http://www.openexchanger.com for more details
+Please visit http://openexchanger.com for more details
