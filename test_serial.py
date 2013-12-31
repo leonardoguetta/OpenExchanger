@@ -14,6 +14,12 @@ import time
 #
 # APEX Configuration Sheet
 # Pulse/Serial, 4 Pulses per dollar, Fast Pulse Speed, Lighted Bezel - Flashing, Currencies: 1, 5, 10, 20, 50, 100, Security Level: Low, Direction: All 4 ways
+#
+# A huge thank you to Mike Parks (https://helpouts.google.com/114808324731233563403/ls/b47f0efd3a3a4023) for his help getting this to work)
+#
+# Gregg Geil
+
+
 
 #Constants
 PIN = 18
