@@ -8,7 +8,7 @@ import time
 #APEX              PI
 #-----------------------------
 #PIN 1 (PULSE)  --> Pin 18
-#PIN 4 (Ground) --> Raspberry PI Ground (important tu use the pi to standardize the ground)
+#PIN 4 (Ground) --> Raspberry PI Ground (important to use the pi to standardize the ground)
 #Pin 11 (12V)   --> DO NOT CONNECT TO PI (this should be connected to a 12v adapter)
 #PIN 12 (Enable)--> DO NOT CONNECT TO PI (this should be tied to 12v Ground)
 #
