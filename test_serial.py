@@ -32,5 +32,6 @@ wiringpi.pinMode(PIN, wiringpi.INPUT)
 wiringpi.pullUpDnControl(PIN,wiringpi.PUD_UP)
 
 while 1:
+ #1 will represent normal state, 0 will reprsent a pulse.
  print wiringpi.digitalRead(PIN)
  time.sleep(.1)
