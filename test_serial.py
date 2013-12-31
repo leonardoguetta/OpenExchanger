@@ -2,6 +2,19 @@
 import wiringpi
 import time
 
+#Purpose: Test the Raspberry PI GPIO connectivity to the Pyramid Apex 5400 Bill Acceptor.
+#PINOUT Configuration
+#
+#APEX              PI
+#-----------------------------
+#PIN 1 (PULSE)  --> Pin 18
+#PIN 4 (Ground) --> Raspberry PI Ground (important tu use the pi to standardize the ground)
+#Pin 11 (12V)   --> DO NOT CONNECT TO PI (this should be connected to a 12v adapter)
+#PIN 12 (Enable)--> DO NOT CONNECT TO PI (this should be tied to 12v Ground)
+#
+# APEX Configuration Sheet
+# Pulse/Serial, 4 Pulses per dollar, Fast Pulse Speed, Lighted Bezel - Flashing, Currencies: 1, 5, 10, 20, 50, 100, Security Level: Low, Direction: All 4 ways
+
 #Constants
 PIN = 18
 
