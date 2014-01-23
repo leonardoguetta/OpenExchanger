@@ -30,8 +30,14 @@ wiringpi.pinMode(PIN, wiringpi.INPUT)
 
 #Need to pull up to 3.3v since the Apex 5400 goes to 0 to mark a pulse
 wiringpi.pullUpDnControl(PIN,wiringpi.PUD_UP)
-
+pulses = 0
+amount = 0
 while 1:
  #1 will represent normal state, 0 will reprsent a pulse.
- print wiringpi.digitalRead(PIN)
- time.sleep(.1)
+ if wiringpi.digitalRead(PIN) == 0:
+  pulses = pulses + 1
+  if pulses == 4:
+	pulses = 0
+	amount = amount + 1
+  print 'Total Amount: ' + str(amount)
+ time.sleep(.01)

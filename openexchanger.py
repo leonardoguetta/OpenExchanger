@@ -9,7 +9,7 @@
 #
 # AdaFruit CharLCD Plate     - https://github.com/adafruit/Adafruit-Raspberry-Pi-Python-Code.git
 # AdaFruit Thermal Printer   - https://github.com/adafruit/Adafruit-Thermal-Printer-Library
-# NewSoftSerial 			 - http://arduiniana.org/NewSoftSerial/NewSoftSerial10c.zip (Required for AdaFruit Thermal Printer)
+# NewSoftSerial              - http://arduiniana.org/NewSoftSerial/NewSoftSerial10c.zip (Required for AdaFruit Thermal Printer)
 #
 # Influenced by Sheldon Hartling's Radio.PY
 #
@@ -32,6 +32,7 @@
 
 
 #dependancies
+from __future__ import print_function
 from Adafruit_I2C          import Adafruit_I2C
 from Adafruit_MCP230xx     import Adafruit_MCP230XX
 from Adafruit_CharLCDPlate import Adafruit_CharLCDPlate
@@ -40,12 +41,15 @@ from subprocess            import *
 from time                  import sleep, strftime
 from Queue                 import Queue
 from threading             import Thread
-from Adafruit_Thermal 	   import Adafruit_Thermal
+from Adafruit_Thermal      import Adafruit_Thermal
 
+
+import RPi.GPIO as GPIO
 import smbus
 import simplejson
 import requests
 import wiringpi
+import subprocess, time, Image, socket
 
 # Initialize the LCD plate.  Should auto-detect correct I2C bus.  If not,
 # pass '0' for early 256 MB Model B boards or '1' for all later versions
@@ -55,13 +59,27 @@ LCD = Adafruit_CharLCDPlate()
 LCD_QUEUE = Queue()
 
 #Constants
-VALIDATOR_PIN = 18 #For the Bill Acceptor Pulse Pin
+VALIDATOR_PIN = 18  #For the Bill Acceptor Pulse Pin
+LED_PIN = 24        #For the LED Button
+BUTTON_PIN = 23     #For the LED Button
+
 
 #Setup Wiring PI Configuration
 wiringpi.wiringPiSetupGpio()
 wiringpi.pinMode(VALIDATOR_PIN, wiringpi.INPUT)
 wiringpi.pullUpDnControl(VALIDATOR_PIN,wiringpi.PUD_UP)
 
+#Setup GPIO Configuration
+# Use Broadcom pin numbers (not Raspberry Pi pin numbers) for GPIO
+GPIO.setmode(GPIO.BCM)
+
+# Enable LED and button (w/pull-up on latter)
+GPIO.setup(LED_PIN, GPIO.OUT)
+GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+# LED on while working
+GPIO.output(LED_PIN, GPIO.HIGH)
+printer         = Adafruit_Thermal("/dev/ttyAMA0", 9600, timeout=5)   
 # ----------------------------
 # WORKER THREAD
 # ----------------------------
@@ -80,38 +98,12 @@ def update_lcd(q):
       q.task_done()
    return
 
-# ----------------------------
-# MAIN LOOP
-# ----------------------------
-
-def main():
-   # Setup AdaFruit LCD Plate
-   LCD.begin(16,2)
-   LCD.clear()
-   LCD.backlight(LCD.VIOLET)
-
-   # Create the worker thread and make it a daemon
-   worker = Thread(target=update_lcd, args=(LCD_QUEUE,))
-   worker.setDaemon(True)
-   worker.start()
-
-   # Display startup banner
-   display_ipaddr()
-   LCD_QUEUE.put('Welcome to\nOpenExchanger', True)
-   sleep(1)
-   LCD.clear()
-
-   # Main loop
-   while True:
-	lookup_btc()
-	check_validator()
-   update_lcd.join()
 
 # ---------------------------------------
 #  When seconds are just too much
 # ---------------------------------------
 def delay_milliseconds(milliseconds):
-   seconds = milliseconds / float(1000)	# divide milliseconds by 1000 for seconds
+   seconds = milliseconds / float(1000) # divide milliseconds by 1000 for seconds
    sleep(seconds)
 
 # ----------------------------------------
@@ -123,10 +115,45 @@ def lookup_btc():
     data = requests.get(url=url)
     binary = data.content
     output = simplejson.loads(binary)
-    LCD_QUEUE.put('BTC Price: '+ str(output['USD']['buy']) + datetime.now().strftime('%b %d  %H:%M:%S\n'), True)
+    LCD_QUEUE.put('OpenExchanger\nBTC Price: '+ str(output['USD']['buy']) + datetime.now().strftime('%b %d  %H:%M:%S\n'), True)
 
 def check_validator():
-	print wiringpi.digitalRead(VALIDATOR_PIN)
+     if wiringpi.digitalRead(VALIDATOR_PIN) == 0:
+      pulses = pulses + 1
+      if pulses == 4:
+        pulses = 0
+        amount = amount + 1
+      print('Total Amount: ' + str(amount))
+     time.sleep(.1)
+
+def tap():
+    GPIO.output(LED_PIN, GPIO.HIGH)  # LED on while working
+    LCD_QUEUE.put('Create Wallet')
+    subprocess.call(["python", "/home/pi/Projects/Bitcoin/wallet/main.py"])
+    printer.printImage(Image.open('/home/pi/Projects/Bitcoin/wallet/bar.png'), True)
+    printer.feed(3)    
+    GPIO.output(LED_PIN, GPIO.LOW)
+
+# Called when button is held down.  Prints image, invokes shutdown process.
+def hold():
+      GPIO.output(LED_PIN, GPIO.HIGH)
+      printer.printImage(Image.open('/home/pi/Projects/Bitcoin/gfx/goodbye.png'), True)
+      printer.feed(3)
+      subprocess.call("sync")
+      subprocess.call(["shutdown", "-h", "now"])
+      GPIO.output(LED_PIN, GPIO.LOW)
+
+# Called at periodic intervals (30 seconds by default).
+def interval():
+      GPIO.output(LED_PIN, GPIO.HIGH)
+      lookup_btc()
+      GPIO.output(LED_PIN, GPIO.LOW)
+
+# Called once per day (6:30am by default).
+def daily():
+      GPIO.output(LED_PIN, GPIO.HIGH)
+      #do something
+      GPIO.output(LED_PIN, GPIO.LOW)
 
 # ----------------------------
 # DISPLAY TIME AND IP ADDRESS
@@ -147,6 +174,110 @@ def run_cmd(cmd):
    p = Popen(cmd, shell=True, stdout=PIPE, stderr=STDOUT)  
    output = p.communicate()[0]  
    return output
+
+# ----------------------------
+# MAIN LOOP
+# ----------------------------
+
+def main():
+   # Setup AdaFruit LCD Plate
+   LCD.begin(16,2)
+   LCD.clear()
+   #LCD.backlight(LCD.VIOLET)
+
+
+   # Create the worker thread and make it a daemon
+   worker = Thread(target=update_lcd, args=(LCD_QUEUE,))
+   worker.setDaemon(True)
+   worker.start()
+
+   # Display startup banner
+   display_ipaddr()
+   LCD_QUEUE.put('Welcome to\nOpenExchanger', True)
+   sleep(1)
+   LCD.clear()
+
+   # Poll initial button state and time
+   prevButtonState = GPIO.input(BUTTON_PIN)
+   prevTime        = time.time()
+   tapEnable       = False
+   holdEnable      = False 
+   nextInterval    = 0.0   # Time of next recurring operation
+   dailyFlag       = False # Set after daily trigger occurs
+   holdTime        = 2     # Duration for button hold (shutdown)
+   tapTime         = 0.02  # Debounce time for button taps
+   lastId          = '1'   # State information passed to/from interval script
+
+
+   #setup printer
+   LCD_QUEUE.put('Printer Startup')
+   printer.begin(175);
+   printer.boldOn()
+   printer.print('44G Bitcoin Exchanger')
+   printer.boldOff()
+   printer.printImage(Image.open('/home/pi/Projects/Bitcoin/gfx/hello.png'), True)
+   printer.feed(3)
+   
+   print(prevButtonState)
+   # Main loop
+   while (True):
+
+      # Poll current button state and time
+      buttonState = GPIO.input(BUTTON_PIN)
+      t           = time.time()
+      # Has button state changed?
+      if buttonState != prevButtonState:
+        prevButtonState = buttonState   # Yes, save new state/time
+        prevTime        = t
+      else:                             # Button state unchanged
+        if (t - prevTime) >= holdTime:  # Button held more than 'holdTime'?
+          # Yes it has.  Is the hold action as-yet untriggered?
+          if holdEnable == True:        # Yep!
+            hold()                      # Perform hold action (usu. shutdown)
+            holdEnable = False          # 1 shot...don't repeat hold action
+            tapEnable  = False          # Don't do tap action on release
+        elif (t - prevTime) >= tapTime: # Not holdTime.  tapTime elapsed?
+          # Yes.  Debounced press or release...
+          if buttonState == True:       # Button released?
+            if tapEnable == True:       # Ignore if prior hold()
+              tap()                     # Tap triggered (button released)
+              tapEnable  = False        # Disable tap and hold
+              holdEnable = False
+          else:                         # Button pressed
+            tapEnable  = True           # Enable tap and hold actions
+            holdEnable = True
+
+      # LED blinks while idle, for a brief interval every 2 seconds.
+      # Pin 18 is PWM-capable and a "sleep throb" would be nice, but
+      # the PWM-related library is a hassle for average users to install
+      # right now.  Might return to this later when it's more accessible.
+      if ((int(t) & 1) == 0) and ((t - int(t)) < 0.15):
+        GPIO.output(LED_PIN, GPIO.HIGH)
+      else:
+        GPIO.output(LED_PIN, GPIO.LOW)
+
+      # Once per day (currently set for 6:30am local time, or when script
+      # is first run, if after 6:30am), run forecast and sudoku scripts.
+      l = time.localtime()
+      if (60 * l.tm_hour + l.tm_min) > (60 * 6 + 30):
+        if dailyFlag == False:
+          daily()
+          dailyFlag = True
+      else:
+        dailyFlag = False  # Reset daily trigger
+
+      # Every 30 seconds, run Bitcoin Ticker script.  'lastId' is passed around
+      # to preserve state between invocations.  Probably simpler to do an
+      # import thing.
+      if t > nextInterval:
+        nextInterval = t + 30.0
+        result = interval()
+        if result is not None:
+          lastId = result.rstrip('\r\n')
+#   lookup_btc()
+#   check_validator()
+   #update_lcd.join()
+
 
 
 if __name__ == '__main__':
