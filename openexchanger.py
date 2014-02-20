@@ -48,7 +48,6 @@ import RPi.GPIO as GPIO
 import smbus
 import simplejson
 import requests
-import wiringpi
 import subprocess, time, Image, socket
 
 # Initialize the LCD plate.  Should auto-detect correct I2C bus.  If not,
@@ -63,23 +62,22 @@ VALIDATOR_PIN = 18  #For the Bill Acceptor Pulse Pin
 LED_PIN = 24        #For the LED Button
 BUTTON_PIN = 23     #For the LED Button
 
-
-#Setup Wiring PI Configuration
-wiringpi.wiringPiSetupGpio()
-wiringpi.pinMode(VALIDATOR_PIN, wiringpi.INPUT)
-wiringpi.pullUpDnControl(VALIDATOR_PIN,wiringpi.PUD_UP)
-
 #Setup GPIO Configuration
-# Use Broadcom pin numbers (not Raspberry Pi pin numbers) for GPIO
-GPIO.setmode(GPIO.BCM)
+GPIO.setmode(GPIO.BCM)                                      # Use Broadcom pin numbers (not Raspberry Pi pin numbers) for GPIO
+GPIO.setup(VALIDATOR_PIN,GPIO.IN,pull_up_down=GPIO.PUD_UP)  #Setup Bill Validator
+GPIO.setup(LED_PIN, GPIO.OUT)                               #Setup Button LED
+GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)   #Setup Button
 
-# Enable LED and button (w/pull-up on latter)
-GPIO.setup(LED_PIN, GPIO.OUT)
-GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+#App variables
+# Poll initial button state and time
+pulses          = 0
+pulse_per_dollar = 1
+last_change     = time.time()
+pulse_time      = 20 * pulse_per_dollar * 100 #how many ms after bill is done
 
-# LED on while working
-GPIO.output(LED_PIN, GPIO.HIGH)
+GPIO.output(LED_PIN, GPIO.HIGH) # Turn on LED for printer warmup
 printer         = Adafruit_Thermal("/dev/ttyAMA0", 9600, timeout=5)   
+
 # ----------------------------
 # WORKER THREAD
 # ----------------------------
@@ -98,14 +96,6 @@ def update_lcd(q):
       q.task_done()
    return
 
-
-# ---------------------------------------
-#  When seconds are just too much
-# ---------------------------------------
-def delay_milliseconds(milliseconds):
-   seconds = milliseconds / float(1000) # divide milliseconds by 1000 for seconds
-   sleep(seconds)
-
 # ----------------------------------------
 # Retreive the current price of BTC in USD
 # ----------------------------------------
@@ -117,14 +107,21 @@ def lookup_btc():
     output = simplejson.loads(binary)
     LCD_QUEUE.put('OpenExchanger\nBTC Price: '+ str(output['USD']['buy']) + datetime.now().strftime('%b %d  %H:%M:%S\n'), True)
 
-def check_validator():
-     if wiringpi.digitalRead(VALIDATOR_PIN) == 0:
-      pulses = pulses + 1
-      if pulses == 4:
-        pulses = 0
-        amount = amount + 1
-      print('Total Amount: ' + str(amount))
-     time.sleep(.1)
+#-----------------------------------------
+# Check for pulses and increment counter
+#-----------------------------------------
+def check_validator(pin):
+    global pulses
+    pulses = pulses + 1
+    print ("Total Amount: ", pulses)
+    LCD_QUEUE.put('$' + str(pulses) + ' \nHit button to end', True)
+
+    
+# ----------------------------
+def run_cmd(cmd):  
+   p = Popen(cmd, shell=True, stdout=PIPE, stderr=STDOUT)  
+   output = p.communicate()[0]  
+   return output
 
 def tap():
     GPIO.output(LED_PIN, GPIO.HIGH)  # LED on while working
@@ -155,6 +152,32 @@ def daily():
       #do something
       GPIO.output(LED_PIN, GPIO.LOW)
 
+def startup():
+   LCD.begin(16,2)
+   LCD.clear()
+
+   # Create the worker thread and make it a daemon
+   worker = Thread(target=update_lcd, args=(LCD_QUEUE,))
+   worker.setDaemon(True)
+   worker.start()
+
+   # Display startup banner
+   display_ipaddr()
+   LCD_QUEUE.put('Welcome to\nOpenExchanger', True)
+   sleep(1)
+   LCD.clear()
+
+   #setup printer
+   LCD_QUEUE.put('Printer Startup')
+   printer.begin(175);
+   printer.boldOn()
+#   printer.print('44G Bitcoin Exchanger')
+   printer.boldOff()
+#   printer.printImage(Image.open('/home/pi/Projects/Bitcoin/gfx/hello.png'), True)
+#   printer.feed(3)
+   LCD.clear()
+
+
 # ----------------------------
 # DISPLAY TIME AND IP ADDRESS
 # ----------------------------
@@ -169,35 +192,10 @@ def display_ipaddr():
    sleep(5)
    LCD.clear()
 
-# ----------------------------
-def run_cmd(cmd):  
-   p = Popen(cmd, shell=True, stdout=PIPE, stderr=STDOUT)  
-   output = p.communicate()[0]  
-   return output
-
-# ----------------------------
-# MAIN LOOP
-# ----------------------------
+#Define Interupt Callback
+GPIO.add_event_detect(VALIDATOR_PIN, GPIO.FALLING, callback=check_validator,bouncetime=50)
 
 def main():
-   # Setup AdaFruit LCD Plate
-   LCD.begin(16,2)
-   LCD.clear()
-   #LCD.backlight(LCD.VIOLET)
-
-
-   # Create the worker thread and make it a daemon
-   worker = Thread(target=update_lcd, args=(LCD_QUEUE,))
-   worker.setDaemon(True)
-   worker.start()
-
-   # Display startup banner
-   display_ipaddr()
-   LCD_QUEUE.put('Welcome to\nOpenExchanger', True)
-   sleep(1)
-   LCD.clear()
-
-   # Poll initial button state and time
    prevButtonState = GPIO.input(BUTTON_PIN)
    prevTime        = time.time()
    tapEnable       = False
@@ -206,19 +204,8 @@ def main():
    dailyFlag       = False # Set after daily trigger occurs
    holdTime        = 2     # Duration for button hold (shutdown)
    tapTime         = 0.02  # Debounce time for button taps
-   lastId          = '1'   # State information passed to/from interval script
+   lastId          = '1'   # State information passed to/from interval script   
 
-
-   #setup printer
-   LCD_QUEUE.put('Printer Startup')
-   printer.begin(175);
-   printer.boldOn()
-   printer.print('44G Bitcoin Exchanger')
-   printer.boldOff()
-   printer.printImage(Image.open('/home/pi/Projects/Bitcoin/gfx/hello.png'), True)
-   printer.feed(3)
-   
-   print(prevButtonState)
    # Main loop
    while (True):
 
@@ -256,16 +243,16 @@ def main():
       else:
         GPIO.output(LED_PIN, GPIO.LOW)
 
-      # Once per day (currently set for 6:30am local time, or when script
-      # is first run, if after 6:30am), run forecast and sudoku scripts.
-      l = time.localtime()
-      if (60 * l.tm_hour + l.tm_min) > (60 * 6 + 30):
-        if dailyFlag == False:
-          daily()
-          dailyFlag = True
-      else:
-        dailyFlag = False  # Reset daily trigger
-
+      # # Once per day (currently set for 6:30am local time, or when script
+      # # is first run, if after 6:30am), run forecast and sudoku scripts.
+      # l = time.localtime()
+      # if (60 * l.tm_hour + l.tm_min) > (60 * 6 + 30):
+      #   if dailyFlag == False:
+      #     daily()
+      #     dailyFlag = True
+      # else:
+      #   dailyFlag = False  # Reset daily trigger
+      # 
       # Every 30 seconds, run Bitcoin Ticker script.  'lastId' is passed around
       # to preserve state between invocations.  Probably simpler to do an
       # import thing.
@@ -274,13 +261,17 @@ def main():
         result = interval()
         if result is not None:
           lastId = result.rstrip('\r\n')
-#   lookup_btc()
-#   check_validator()
-   #update_lcd.join()
+          lookup_btc()
+
+try:
+    startup()
+    main()
+except KeyboardInterrupt:
+    GPIO.cleanup()
+GPIO.cleanup()
 
 
-
-if __name__ == '__main__':
-  main()
+# if __name__ == '__main__':
+#   main()
 
 
